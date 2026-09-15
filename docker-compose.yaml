@@ -1,0 +1,278 @@
+name: shinzohub-demo
+
+# ──────────────────────────────────────────────────────────────
+# The whole stack: anvil + seeder, SourceHub, ShinzoHub, Hermes, generator,
+# host. Ordering and readiness live here rather than in a start script.
+#
+#   docker compose up -d --wait
+#   docker compose down -v
+#
+# Copy .env.sample to .env first.
+# ──────────────────────────────────────────────────────────────
+
+x-shinzohub-image: &shinzohub-image
+  # Thin layer over the SHA-pinned published image: it adds jq, which genesis
+  # construction needs and the debian-slim base does not have. The hub binary
+  # itself is not rebuilt.
+  image: shinzohub-demo:${SHINZOHUB_SHA}
+  build:
+    context: ./shinzohub
+    args:
+      SHINZOHUB_SHA: ${SHINZOHUB_SHA}
+
+x-ica-oneshot: &ica-oneshot
+  <<: *shinzohub-image
+  restart: "no"
+  networks: [shinzo]
+  volumes:
+    - ./ica:/ica:ro
+  environment:
+    CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
+    NODE: tcp://shinzohub:26657
+    HOME_DIR: /tmp/ica-home
+
+networks:
+  shinzo:
+    driver: bridge
+    ipam:
+      config:
+        # Fixed subnet so the generator can hold a stable address. The host's
+        # bootstrap-peer parser takes /ip4/... and bare IPs; it has no
+        # documented DNS form, so an IP is the safe way to point at it.
+        - subnet: 172.31.0.0/24
+
+volumes:
+  sourcehub-home:
+  shinzohub-home:
+  generator-data:
+  host-data:
+
+services:
+
+  # ── Ethereum source ──────────────────────────────────────────
+
+  anvil:
+    image: ${FOUNDRY_IMAGE}
+    networks: [shinzo]
+    entrypoint: ["anvil"]
+    command:
+      - --host
+      - 0.0.0.0
+      - --chain-id
+      - ${ANVIL_CHAIN_ID}
+      # Mine on a timer, not only on transactions, so the chain always advances.
+      - --block-time
+      - ${ANVIL_BLOCK_TIME}
+    ports:
+      # 8545 on the host belongs to ShinzoHub's EVM endpoint.
+      - "8546:8545"
+    healthcheck:
+      test: ["CMD-SHELL", "cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  seeder:
+    image: ${FOUNDRY_IMAGE}
+    networks: [shinzo]
+    depends_on:
+      anvil:
+        condition: service_healthy
+    entrypoint: ["/bin/sh"]
+    command: ["/seeder/seed.sh"]
+    volumes:
+      - ./seeder:/seeder:ro
+    environment:
+      ANVIL_RPC_URL: http://anvil:8545
+      SEED_INTERVAL: ${SEED_INTERVAL}
+
+  # ── SourceHub ────────────────────────────────────────────────
+
+  sourcehub:
+    image: ${SOURCEHUB_IMAGE}
+    networks: [shinzo]
+    environment:
+      STANDALONE: "1"
+      CHAIN_ID: ${SOURCEHUB_CHAIN_ID}
+      MONIKER: "node"
+    volumes:
+      # Shared so fund-hermes can reach the faucet key.
+      - sourcehub-home:${SOURCEHUB_HOME}
+    ports:
+      - "27686:26657"
+      - "9095:9090"
+      - "1318:1317"
+    healthcheck:
+      test: ["CMD-SHELL", "sourcehubd status --node tcp://localhost:26657 >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  fund-hermes:
+    # The standalone SourceHub image funds only validator + faucet. The relayer
+    # account derived from the shared mnemonic needs a balance of its own.
+    image: ${SOURCEHUB_IMAGE}
+    networks: [shinzo]
+    restart: "no"
+    depends_on:
+      sourcehub:
+        condition: service_healthy
+    volumes:
+      - sourcehub-home:${SOURCEHUB_HOME}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        sourcehubd tx bank send faucet source1cy0p47z24ejzvq55pu3lesxwf73xnrnd0lyxme 100000000uopen
+        --keyring-backend test
+        --chain-id ${SOURCEHUB_CHAIN_ID}
+        --node tcp://sourcehub:26657
+        --home ${SOURCEHUB_HOME}
+        --fees 1000uopen
+        --yes
+        && sleep 3
+
+  # ── ShinzoHub ────────────────────────────────────────────────
+
+  shinzohub:
+    <<: *shinzohub-image
+    networks: [shinzo]
+    volumes:
+      - shinzohub-home:/shinzohub
+      - ./shinzohub/entrypoint.sh:/demo/entrypoint.sh:ro
+    environment:
+      CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
+      HOME_DIR: /shinzohub
+      BLOCK_TIME: ${BLOCK_TIME}
+    ports:
+      - "26657:26657"   # CometBFT RPC
+      - "1317:1317"     # Cosmos REST
+      - "9090:9090"     # gRPC
+      - "8545:8545"     # EVM JSON-RPC
+    healthcheck:
+      test: ["CMD-SHELL", "shinzohubd status --home /shinzohub >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+
+  # ── Relayer ──────────────────────────────────────────────────
+
+  hermes:
+    image: ${HERMES_IMAGE}
+    networks: [shinzo]
+    depends_on:
+      sourcehub:
+        condition: service_healthy
+      shinzohub:
+        condition: service_healthy
+      fund-hermes:
+        condition: service_completed_successfully
+    volumes:
+      - ./hermes/config.toml:/tmp/hermes-config.toml:ro
+      - ./hermes/entrypoint.sh:/usr/local/bin/shinzo-hermes-entrypoint.sh:ro
+    environment:
+      SHINZOHUB_CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
+    entrypoint: ["/bin/bash", "/usr/local/bin/shinzo-hermes-entrypoint.sh"]
+    healthcheck:
+      # Replaces the old `sleep 20`: the entrypoint writes this only after
+      # `create connection` succeeds.
+      test: ["CMD-SHELL", "test -f /home/hermes/.hermes/connection-ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 60
+      start_period: 5s
+
+  # ── Chain bootstrap, one-shots ───────────────────────────────
+
+  register-ica:
+    <<: *ica-oneshot
+    depends_on:
+      hermes:
+        condition: service_healthy
+    command: ["/ica/register_ica.sh"]
+
+  register-policy:
+    <<: *ica-oneshot
+    depends_on:
+      register-ica:
+        condition: service_completed_successfully
+    command: ["/ica/register_shinzo_policy.sh"]
+
+  register-objects:
+    <<: *ica-oneshot
+    depends_on:
+      register-policy:
+        condition: service_completed_successfully
+    command: ["/ica/register_shinzo_objects.sh"]
+
+  # ── Shinzo data plane ────────────────────────────────────────
+
+  generator:
+    image: ${GENERATOR_IMAGE}
+    platform: linux/amd64
+    networks:
+      shinzo:
+        ipv4_address: 172.31.0.20
+    depends_on:
+      anvil:
+        condition: service_healthy
+      shinzohub:
+        condition: service_healthy
+    mem_limit: ${GENERATOR_MEM_LIMIT}
+    volumes:
+      - generator-data:/app/.defra
+      - ./generator/config.yaml:/app/config/config.yaml:ro
+    environment:
+      GETH_RPC_URL: ${GETH_RPC_URL}
+      GETH_WS_URL: ${GETH_WS_URL}
+      DEFRADB_KEYRING_SECRET: ${DEFRADB_KEYRING_SECRET}
+      SHINZOHUB_REST_BASE: shinzohub
+      CHAIN_NAME: ${CHAIN_NAME}
+      CHAIN_NETWORK: ${CHAIN_NETWORK}
+      SCHEMA_AUTH_MODE: none
+      SNAPSHOT_ENABLED: "false"
+      LOG_LEVEL: info
+    ports:
+      - "8080:8080"     # health
+      - "9181:9181"     # DefraDB API
+      - "9171:9171"     # libp2p
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  host:
+    image: ${HOST_IMAGE}
+    platform: linux/amd64
+    networks: [shinzo]
+    depends_on:
+      generator:
+        condition: service_healthy
+      shinzohub:
+        condition: service_healthy
+      register-objects:
+        condition: service_completed_successfully
+    mem_limit: ${HOST_MEM_LIMIT}
+    stop_grace_period: 90s
+    volumes:
+      - host-data:/app/.defra
+      - ./host/config.yaml:/app/config.yaml:ro
+    environment:
+      DEFRA_URL: 0.0.0.0:9181
+      DEFRA_KEYRING_SECRET: ${DEFRADB_KEYRING_SECRET}
+      # The peer ID is discovered at dial time, so only the address is needed.
+      BOOTSTRAP_PEERS: /ip4/172.31.0.20/tcp/9171
+      LOG_LEVEL: info
+    ports:
+      - "8081:8080"     # health / metrics
+      - "9281:9181"     # DefraDB API
+      - "9282:9182"     # GraphQL playground
+      - "9271:9171"     # libp2p
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/metrics"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s

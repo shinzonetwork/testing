@@ -1,0 +1,95 @@
+# Host client config for the local Docker stack.
+#
+# Why this file exists at all: hub_base_url has no environment override in the
+# host client (config.go only reads START_HEIGHT, BOOTSTRAP_PEERS, DEFRA_URL,
+# INDEXER_SCHEMA_ENDPOINT and INDEXER_SCHEMA_ENDPOINT_AUTH_TOKEN), so the only
+# way to point the host at a local hub is a mounted config.
+
+defradb:
+  url: "0.0.0.0:9181"
+  keyring_secret: "local-demo-keyring-secret"
+  p2p:
+    enabled: true
+    # Overridden by BOOTSTRAP_PEERS in compose, which carries the generator's
+    # static address. resolveBootstrapPeers() discovers the peer ID itself, so
+    # no libp2p identity needs to be known ahead of time.
+    bootstrap_peers: []
+    listen_addr: "/ip4/0.0.0.0/tcp/9171"
+    max_retries: 5
+    retry_base_delay_ms: 1000
+    reconnect_interval_ms: 60000
+    enable_auto_reconnect: true
+    peer_discovery_timeout_ms: 10000
+  store:
+    path: "./.defra"
+    block_cache_mb: 128
+    memtable_mb: 32
+    index_cache_mb: 64
+    num_compactors: 2
+    value_log_file_size_mb: 64
+
+shinzo:
+  minimum_attestations: 1
+  start_height: 0
+  # Bare hostname, no scheme and no port. deriveShinzoHubURLs() turns this into
+  # http://shinzohub:26657, ws://shinzohub:26657/websocket and
+  # http://shinzohub:1317, which is exactly the compose service.
+  hub_base_url: shinzohub
+
+  wait_for_gaps: true
+  max_gap_size: 1000
+  cache_queue_size: 10000
+
+  view_inactivity_timeout: "24h"
+  view_cleanup_interval: "1h"
+  view_worker_count: 4
+  view_queue_size: 1000
+  batch_processing_enabled: true
+  batch_max_views_per_job: 50
+  batch_query_cache_size: 1000
+
+  batch_writer_count: 4
+  batch_size: 200
+  batch_flush_interval: 100
+  use_block_signatures: true
+  doc_worker_count: 8
+  doc_queue_size: 10000
+
+  # ── Event replication filter: OFF ──
+  # This is a real DefraDB client.ReplicationFilter, not inert config. When
+  # enabled it is assigned to defraNode.ReplicationFilter before the node
+  # starts, and AllowReplication() rejects every Transaction, Log and
+  # AccessListEntry that does not match an enabled group. Blocks and block
+  # signatures pass regardless.
+  #
+  # The upstream default is an allowlist of Uniswap V3 / USDT / USDC mainnet
+  # addresses. Against a local anvil chain none of those exist, so the host
+  # would keep replicating blocks while silently discarding all of their
+  # contents -- a stack that looks healthy with nothing inside it.
+  #
+  # enabled: false makes NewEventReplicationFilter() return nil, so no filter
+  # is installed at all. Not a permissive filter: no filter.
+  event_filter:
+    enabled: false
+
+schema:
+  indexer_schema_endpoint: "/api/v1/schema"
+  http_client_timeout_secs: 30
+
+logger:
+  development: true
+
+host:
+  lens_registry_path: "./.defra/lens"
+  health_server_port: 8080
+  open_browser_on_start: false
+  # No indexer to pull historical snapshots from on a local chain.
+  snapshot:
+    enabled: false
+
+pruner:
+  enabled: true
+  max_blocks: 1000
+  prune_threshold: 1
+  interval_seconds: 30
+  prune_history: false
