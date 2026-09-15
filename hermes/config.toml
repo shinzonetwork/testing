@@ -35,8 +35,8 @@ trusting_period = '14days'
 trust_threshold = '2/3'
 address_type = { derivation = 'cosmos' }
 
-# Chain id tracks SHINZOHUB_CHAIN_ID in .env. The entrypoint rewrites the
-# placeholder below at startup so the value lives in exactly one place.
+# The entrypoint substitutes this placeholder with SHINZOHUB_CHAIN_ID at startup,
+# so the chain id is defined once, in .env.
 [[chains]]
 id = '__SHINZOHUB_CHAIN_ID__'
 type = 'CosmosSdk'

@@ -70,23 +70,28 @@ anvil ─healthy─▶ generator ─healthy─▶ host ◀───────�
 ```
 
 Every wait is a Compose condition. Hermes reports readiness by writing a marker
-file once `create connection` succeeds; `register-ica` polls for the ICA channel
-to reach `STATE_OPEN` inside its own container and exits only then, so
-downstream services gate on `service_completed_successfully` rather than a sleep.
+file once `create connection` succeeds, and `register-ica` polls for the ICA
+channel to reach `STATE_OPEN` inside its own container, exiting only once it is
+open — so the services after it can simply depend on it completing.
+
+The bootstrap one-shots are safe to re-run: each waits for its transaction to
+commit, retries while preconditions are still settling, and treats work that is
+already done as success.
 
 ## Configuration
 
 Everything lives in `.env`. The values worth knowing about:
 
-- **`SHINZOHUB_SHA`** — ShinzoHub publishes only commit-SHA tags, from pushes to
-  `main` and `develop`. The default is the `origin/develop` tip.
-  `scripts/demo` does not exist on `main`, so `develop` is the branch that
-  carries this demo.
-- **`SHINZOHUB_CHAIN_ID=91273001`** — not the `91273002` the upstream demo
-  scripts use. `Feat/change chain (#95)` moved `ChainID18Decimals` to the
-  testnet value, and the pinned SHA is after that commit. If you repin to an
-  older SHA, set this back to `91273002`; it is referenced in exactly one place
-  and flows to the hub, the Hermes config and the ICA scripts from there.
+- **`SHINZOHUB_SHA`** — ShinzoHub publishes only commit-SHA tags, and only from
+  pushes to `main` and `develop`. The pin is a `develop` commit, because the
+  demo tooling lives on that branch. There is no floating tag to track instead,
+  so this needs bumping by hand.
+- **`SHINZOHUB_CHAIN_ID`** — must match the `ChainID18Decimals` constant
+  compiled into whichever image `SHINZOHUB_SHA` names, or the Cosmos chain id
+  and the EVM chain id disagree and transactions fail in confusing ways.
+  `91273001` is right for the pinned image; images from before the testnet
+  switch want `91273002`. Set in one place, and flows to the hub, the Hermes
+  config and the ICA scripts from there.
 - **`GETH_RPC_URL` / `GETH_WS_URL`** — default to the bundled anvil. Point them
   at a real provider and stop `anvil`/`seeder` to index a live chain instead.
 - **`SOURCEHUB_HOME`** — where the SourceHub home directory lives *inside* its
@@ -100,12 +105,10 @@ Everything lives in `.env`. The values worth knowing about:
 
 ### A note on the image tags
 
-The `docker-compose.yml` files in the generator and host repos both reference
-tags that are not useful here: the generator's `:standard` is unpublished
-entirely, and the host's `:v0.6.5-ethereum-mainnet` resolves but dates from
-July. This stack pins both to `v0.6.5.4-ethereum-mainnet`, which exists in both
-repos and was built from the same release (the two images are three minutes
-apart).
+The generator and host are pinned to `v0.6.5.4-ethereum-mainnet`, which exists
+in both repos and was built from the same release. Bump them together — a
+mismatched pair will disagree about schema. Not every tag in those registries
+resolves, so check a tag pulls before pinning it.
 
 ## Why the collections say "Mainnet"
 
@@ -123,14 +126,14 @@ Only the naming says Mainnet; the chain is your local anvil.
 
 ## Notes on the images
 
-Four of the six components run published images unmodified. ShinzoHub gets a
-three-line layer on top of its pinned image (`shinzohub/Dockerfile`) that
-installs `jq` — genesis construction needs it and the `debian-slim` base does
-not ship it. The hub binary itself is never rebuilt from source.
+Every component runs a published image. ShinzoHub gets a three-line layer on
+top of its pinned image (`shinzohub/Dockerfile`) that installs `jq`, which
+genesis construction needs and the `debian-slim` base does not ship. The hub
+binary itself is never rebuilt from source.
 
-`shinzohub/entrypoint.sh` replaces the image's own entrypoint. The upstream
-`STANDALONE=1` path builds a generic genesis with no `acc0`/`hermes` keys, no
-admin parameter and no ICA controller, so it cannot drive this demo.
+`shinzohub/entrypoint.sh` replaces the image's own entrypoint, which in
+standalone mode builds a generic genesis with no `acc0`/`hermes` keys, no admin
+parameter and no ICA controller — none of which this demo can run without.
 
 ## Host event filtering is off
 
@@ -145,7 +148,7 @@ empty block headers.
 ## Ethereum data
 
 `seeder/seed.sh` deploys a 39-byte contract that emits a `Transfer`-topic log on
-any call, then alternates calls to it with plain value transfers. The foundry
-image has no `solc`, so the contract is raw bytecode rather than a forge
-project. Without the seeder, anvil produces only empty headers and the
-transaction, log and receipt paths never get exercised.
+any call, then alternates calls to it with plain value transfers. The contract
+is raw bytecode because the foundry image ships no `solc`. Without the seeder,
+anvil produces only empty headers and the transaction, log and receipt paths
+never get exercised.

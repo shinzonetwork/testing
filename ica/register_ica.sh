@@ -8,18 +8,16 @@ CHANNEL_ATTEMPTS="${CHANNEL_ATTEMPTS:-60}"
 
 ensure_key
 
-# Registering the ICA is a one-shot, not a retryable operation: once it lands,
-# every further attempt fails with "active channel already set for this owner".
-# So it is issued once and tolerated if already done, and the readiness check is
-# the channel state below rather than the tx succeeding.
+# Registering the ICA is not retryable: once it lands, every further attempt
+# fails with "active channel already set for this owner". So it is issued once
+# and tolerated if already done, which keeps re-running this container safe.
+# Readiness is the channel state below, not the tx result.
 echo "==> Registering ICA ($SHINZOHUB_CONNECTION_ID -> $SOURCEHUB_CONNECTION_ID)..."
 TOLERATE='active channel already set' \
   tx sourcehub register-ica "$SHINZOHUB_CONNECTION_ID" "$SOURCEHUB_CONNECTION_ID"
 
-# The upstream script polled for this in start_all_docker.sh. Keeping the poll
-# inside the container means this service only exits once the channel is open,
-# so downstream services can gate on service_completed_successfully instead of
-# guessing with a sleep.
+# Polling here, rather than in the caller, means this container exits only once
+# the channel is open — so register-policy can simply depend on it completing.
 echo "==> Waiting for the ICA channel handshake..."
 for i in $(seq 1 "$CHANNEL_ATTEMPTS"); do
   if $BINARY q ibc channel channels --node "$NODE" -o json 2>/dev/null \

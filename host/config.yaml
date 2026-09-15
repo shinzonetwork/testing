@@ -1,9 +1,9 @@
 # Host client config for the local Docker stack.
 #
-# Why this file exists at all: hub_base_url has no environment override in the
-# host client (config.go only reads START_HEIGHT, BOOTSTRAP_PEERS, DEFRA_URL,
-# INDEXER_SCHEMA_ENDPOINT and INDEXER_SCHEMA_ENDPOINT_AUTH_TOKEN), so the only
-# way to point the host at a local hub is a mounted config.
+# This file is mounted because hub_base_url has no environment override — the
+# host reads only START_HEIGHT, BOOTSTRAP_PEERS, DEFRA_URL and the two
+# INDEXER_SCHEMA_ENDPOINT vars from the environment. A mounted config is the
+# only way to point it at a local hub.
 
 defradb:
   url: "0.0.0.0:9181"
@@ -56,19 +56,16 @@ shinzo:
   doc_queue_size: 10000
 
   # ── Event replication filter: OFF ──
-  # This is a real DefraDB client.ReplicationFilter, not inert config. When
-  # enabled it is assigned to defraNode.ReplicationFilter before the node
-  # starts, and AllowReplication() rejects every Transaction, Log and
-  # AccessListEntry that does not match an enabled group. Blocks and block
-  # signatures pass regardless.
+  # This is a live DefraDB ReplicationFilter, not inert config. Enabled, it
+  # rejects every Transaction, Log and AccessListEntry that does not match one
+  # of its groups, while blocks and block signatures pass regardless.
   #
-  # The upstream default is an allowlist of Uniswap V3 / USDT / USDC mainnet
-  # addresses. Against a local anvil chain none of those exist, so the host
-  # would keep replicating blocks while silently discarding all of their
-  # contents -- a stack that looks healthy with nothing inside it.
+  # Its groups match contract addresses, and the image's defaults are Ethereum
+  # mainnet ones (Uniswap V3, USDT, USDC) that cannot exist on a local anvil
+  # chain. Leaving it on would give a host that replicates block headers and
+  # silently discards all of their contents — healthy-looking and empty.
   #
-  # enabled: false makes NewEventReplicationFilter() return nil, so no filter
-  # is installed at all. Not a permissive filter: no filter.
+  # false makes the host install no filter at all, rather than a permissive one.
   event_filter:
     enabled: false
 

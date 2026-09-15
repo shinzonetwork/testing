@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 # Shared setup for the ICA bootstrap one-shots.
 #
-# Changed from the upstream scripts/ica/*.sh: BINARY, NODE and CHAIN_ID were
-# hardcoded to ./build/shinzohubd, tcp://127.0.0.1:26657 and 91273002. All three
-# are env-driven now, because none of those hold inside a container.
-#
-# These containers do NOT share the node's volume. They recover acc0 into a
-# throwaway home instead, so nothing here can corrupt the validator's keyring.
+# These containers do not share the node's volume. Each recovers acc0 into a
+# throwaway home of its own, so nothing here can touch the validator's keyring.
 
 set -euo pipefail
 
@@ -33,19 +29,17 @@ ensure_key () {
   fi
 }
 
-# Broadcast a tx AND wait for it to be committed, failing if it reverts.
+# Broadcast a tx and wait for it to be committed, failing if it reverts.
 #
-# The upstream scripts only checked that the broadcast was accepted, then slept.
-# That hides execution failures: `tx sourcehub register-policy` returns 0 the
-# moment CheckTx passes, long before the message has actually run. wait-tx
-# closes that gap so a one-shot's exit code means what compose assumes it means.
+# The wait matters: the CLI returns as soon as CheckTx passes, long before the
+# message has actually run, so a broadcast that "succeeds" can still revert on
+# chain. Waiting makes a one-shot's exit code mean what compose assumes it means.
 #
-# Fields are pulled out with grep, not jq, on purpose: the CLI writes
-# "gas estimate: N" to stderr, so the captured stream is JSON plus noise and
-# feeding the whole thing to jq fails.
+# Fields come out with grep rather than jq because the CLI writes
+# "gas estimate: N" to stderr, so the captured stream is JSON mixed with noise.
 #
-# Set TOLERATE to a regex to treat a matching failure as success. Used for
-# operations that are not idempotent but are safe to find already done.
+# Set TOLERATE to a regex to treat a matching failure as success — for
+# operations that are not repeatable but are safe to find already done.
 TX_ERR_LOG="${TX_ERR_LOG:-/tmp/tx-err.log}"
 
 tx () {
@@ -98,17 +92,16 @@ tx () {
   echo "    tx $hash committed."
 }
 
-# Retry a tx until it succeeds.
+# Retry a tx until its preconditions are met.
 #
-# Some registrations depend on state that only lands after an ICA round-trip to
-# SourceHub and back, and ShinzoHub exposes no query for it -- there is no
-# `q sourcehub policy-id`. So the tx itself is the readiness probe. With
-# --gas auto a missing precondition fails during simulation, before anything is
+# Registering objects needs the policy id, which only lands after an ICA
+# round-trip to SourceHub and back. ShinzoHub exposes no query for that state --
+# there is no `q sourcehub policy-id` -- so the tx itself is the readiness probe.
+# Under --gas auto a missing precondition fails in simulation, before anything is
 # broadcast, so retrying cannot double-submit.
 #
-# Only for operations that are safe to repeat. Registering the ICA is NOT one of
-# them: it succeeds once and then permanently reports "active channel already
-# set", so it uses plain tx() plus a channel poll instead.
+# Only for repeatable operations. Registering the ICA is not one: it succeeds
+# once and then permanently reports "active channel already set".
 tx_retry () {
   local n
   for n in $(seq 1 "$TX_ATTEMPTS"); do

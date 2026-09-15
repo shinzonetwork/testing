@@ -2,17 +2,13 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────
-# Hermes relayer. Creates the IBC connection, then relays.
+# Hermes relayer: adds its keys, creates the IBC connection, then relays.
 #
-# Changed from the upstream demo entrypoint:
-#   - chain 91273002 pointed at host.docker.internal; ShinzoHub is a container
-#     now, so it is plain compose DNS and extra_hosts is gone
-#   - the chain id is templated from SHINZOHUB_CHAIN_ID rather than hardcoded
-#   - the 60-attempt retry loop is gone: depends_on/service_healthy already
-#     guarantees both chains are up. A few attempts remain because the light
-#     client still needs a couple of blocks on each side.
-#   - writes a readiness marker so compose can gate register-ica on the
-#     connection existing, instead of the old `sleep 20`
+# Compose starts this only once both chains are healthy, so the retries below
+# cover just the light client needing a couple of blocks on each side.
+#
+# On success it touches a marker file, which is what the container's healthcheck
+# tests — that is how the bootstrap one-shots know the connection exists.
 # ──────────────────────────────────────────────────────────────
 
 CONFIG=/home/hermes/.hermes/config.toml

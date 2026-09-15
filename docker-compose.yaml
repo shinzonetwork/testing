@@ -2,18 +2,17 @@ name: shinzohub-demo
 
 # ──────────────────────────────────────────────────────────────
 # The whole stack: anvil + seeder, SourceHub, ShinzoHub, Hermes, generator,
-# host. Ordering and readiness live here rather than in a start script.
+# host. Service ordering and readiness are expressed here, as healthchecks and
+# depends_on conditions.
 #
+#   cp .env.sample .env
 #   docker compose up -d --wait
 #   docker compose down -v
-#
-# Copy .env.sample to .env first.
 # ──────────────────────────────────────────────────────────────
 
 x-shinzohub-image: &shinzohub-image
-  # Thin layer over the SHA-pinned published image: it adds jq, which genesis
-  # construction needs and the debian-slim base does not have. The hub binary
-  # itself is not rebuilt.
+  # Thin layer over the SHA-pinned published image, adding the jq that genesis
+  # construction needs. The hub binary itself is never rebuilt.
   image: shinzohub-demo:${SHINZOHUB_SHA}
   build:
     context: ./shinzohub
@@ -174,8 +173,8 @@ services:
       SHINZOHUB_CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
     entrypoint: ["/bin/bash", "/usr/local/bin/shinzo-hermes-entrypoint.sh"]
     healthcheck:
-      # Replaces the old `sleep 20`: the entrypoint writes this only after
-      # `create connection` succeeds.
+      # The entrypoint writes this only after `create connection` succeeds, so
+      # "healthy" here means the IBC connection exists.
       test: ["CMD-SHELL", "test -f /home/hermes/.hermes/connection-ready"]
       interval: 3s
       timeout: 2s

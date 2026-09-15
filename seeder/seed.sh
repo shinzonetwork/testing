@@ -3,12 +3,12 @@ set -eu
 
 # ──────────────────────────────────────────────────────────────
 # Drives transaction traffic into anvil so the generator has something with
-# substance to index. Without this, anvil mines empty headers and the
-# transaction / log / receipt paths through the whole stack go untested.
+# substance to index. Left alone, anvil mines empty headers and the transaction,
+# log and receipt paths through the whole stack never get exercised.
 #
-# The foundry image has no solc and we do not want a network fetch at runtime,
-# so the contract is raw bytecode rather than a forge project. It is a minimal
-# log emitter: any call to it emits a Transfer-topic LOG1 and stops.
+# The contract is raw bytecode because the foundry image ships no solc and
+# fetching one at runtime would make startup depend on the network. It is a
+# minimal log emitter: any call to it emits a Transfer-topic LOG1 and stops.
 #
 #   runtime:  PUSH32 <topic0>  PUSH1 0  PUSH1 0  LOG1  STOP
 #   init:     standard CODECOPY-and-RETURN preamble
@@ -54,8 +54,8 @@ while true; do
     echo "    warn: emitter call failed (round $i)"
   cast send "$SINK" --value 1000000000000 --private-key "$PK" --rpc-url "$RPC" >/dev/null 2>&1 || \
     echo "    warn: transfer failed (round $i)"
-  # Not `[ ... ] && echo`: under `set -e` a false test makes that list the
-  # failing top-level command and kills the loop.
+  # An `if`, not `[ ... ] && echo`: under `set -e` the latter makes a false test
+  # the failing top-level command and kills the loop.
   if [ $((i % 20)) -eq 0 ]; then
     echo "    $i rounds seeded (height $(cast block-number --rpc-url "$RPC"))"
   fi

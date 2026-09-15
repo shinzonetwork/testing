@@ -1,16 +1,11 @@
 # Generator config for the local Docker stack.
 #
-# Why this file exists at all: LoadConfig() does NOT expand environment
-# variables inside the YAML. It unmarshals the file as-is and then applies
-# overrides only for env vars that are non-empty. The shipped config stores
+# This file is mounted over the one in the image because the generator does not
+# expand environment variables inside its YAML — it unmarshals the file as-is
+# and then applies env overrides only where the variable is non-empty. So any
+# "${VAR}" left in the config survives as a literal string.
 #
-#     api_key: "${GETH_API_KEY}"
-#
-# as a literal string. With GETH_API_KEY unset that value stays literal and is
-# non-empty, so NewEthereumClient() takes the authenticated branch and installs
-# an apiKeyTransport whose header NAME is normalizeHeaderName("${GETH_API_KEY_TYPE}")
-# -- lowercase-and-trim only, no sanitizing. That is not a valid HTTP header
-# token. Leaving both empty here takes the plain ethclient.Dial path instead.
+# That matters most for the api_key fields below; see the note there.
 
 chain:
   name: "Ethereum"
