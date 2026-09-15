@@ -110,6 +110,42 @@ in both repos and was built from the same release. Bump them together — a
 mismatched pair will disagree about schema. Not every tag in those registries
 resolves, so check a tag pulls before pinning it.
 
+## Building the generator from source
+
+There are no per-PR image builds, so testing unmerged generator work means
+building it locally. An overlay swaps the generator's published image for a
+build context:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.generator-src.yaml \
+  up -d --build --wait
+```
+
+Whatever is currently checked out in `GENERATOR_REPO` is what gets built —
+branch, tag or detached commit, the overlay does not care. To test a different
+version, check it out there and re-run the same command with `--build`.
+`GENERATOR_REPO` lives in `.env` and defaults to `../shinzo-generator-client`.
+
+Drop the second `-f` to go back to the published `GENERATOR_IMAGE`. Nothing else
+about the stack changes either way.
+
+The first build takes a while — the generator's Dockerfile fetches WASM runtimes
+and compiles with cgo. Later builds reuse the layer cache unless `go.mod`
+changes.
+
+Wipe the generator's store when swapping between builds, since a schema change
+will not apply to an existing one:
+
+```bash
+docker compose rm -sfv generator && docker volume rm shinzohub-demo_generator-data
+```
+
+One limit worth knowing: the host uses the schema baked into its own image, so
+if the build under test renames collections or adds fields, the generator will
+publish them and the host will quietly ignore them — a healthy-looking stack
+with an empty host. When the change touches the schema, query the generator
+directly on `:9181` rather than the host on `:9281`.
+
 ## Why the collections say "Mainnet"
 
 Collection names are derived as `{CHAIN_NAME}__{CHAIN_NETWORK}__Block`, so the
