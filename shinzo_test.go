@@ -52,10 +52,10 @@ func (s *ShinzoTestSuite) SetupSuite() {
 	)
 	s.Require().NoError(err)
 
+	s.stack = stack
+
 	err = stack.Up(ctx, compose.Wait(true))
 	s.Require().NoError(err)
-
-	s.stack = stack
 
 	host, err := stack.ServiceContainer(ctx, "host")
 	s.Require().NoError(err)
@@ -66,9 +66,9 @@ func (s *ShinzoTestSuite) SetupSuite() {
 	s.hostGraphQL = endpoint + graphQLPath
 }
 
-// TeardownSuite is called after all tests to stop and destroy test containers.
-func (s *ShinzoTestSuite) TeardownSuite() {
-	err := s.stack.Down(s.T().Context())
+// TearDownSuite is called after all tests to stop and destroy test containers.
+func (s *ShinzoTestSuite) TearDownSuite() {
+	err := s.stack.Down(s.T().Context(), compose.RemoveOrphans(true), compose.RemoveVolumes(true))
 	s.Require().NoError(err)
 }
 
