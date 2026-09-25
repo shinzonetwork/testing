@@ -1,0 +1,73 @@
+# E2E-multi generator config. run.sh renders one copy per generator into
+# .run/gen-N.yaml, replacing __LISTEN_IP__ and __BOOTSTRAP_PEERS__.
+
+chain:
+  name: "Ethereum"
+  network: "Mainnet"
+  hub: "localhost"  # No real hub in e2e
+
+defradb:
+  url: "http://localhost:9181"
+  keyring_secret: ""  # overridden by env var
+  embedded: true
+  p2p:
+    enabled: true
+    accept_incoming: false  # overridden by DEFRADB_P2P_ACCEPT_INCOMING
+    bootstrap_peers: __BOOTSTRAP_PEERS__
+    # Bound to the p2p-net IP only, so no libp2p traffic uses chain-net.
+    listen_addr: "/ip4/__LISTEN_IP__/tcp/9171"
+    max_retries: 5
+    retry_base_delay_ms: 1000
+    reconnect_interval_ms: 10000
+    enable_auto_reconnect: true
+    # Explicit libp2p resource-manager limits, so the harness measures the configured path
+    # rather than libp2p's autoscaled one.
+    #
+    # resource_memory_mib is sized to NODE_MEM_LIMIT (3g) and GEN_/HOST_GOMEMLIMIT (2GiB), NOT to
+    # the production value of 10240 - these nodes are 3g containers and six of them share the
+    # Docker VM. The stream and fd counts match production, since that is where the headroom that
+    # matters lives and it costs no memory: 1024MiB/2048fd/4096str resolves to 4224 inbound
+    # streams per peer, against 2304 for a node autoscaling off a 16GiB machine.
+    #
+    # These knobs cannot raise the per-stream (16MiB), per-protocol-per-peer (16MiB) or
+    # per-connection (32MiB) memory ceilings, which are constant at every budget.
+    resource_memory_mib: 1024
+    resource_file_descriptors: 2048
+    max_streams_per_peer: 4096
+  store:
+    path: "./.defra"
+    block_cache_mb: 128
+    memtable_mb: 32
+    index_cache_mb: 64
+    num_compactors: 2
+    value_log_file_size_mb: 64
+
+geth:
+  node_url: "${GETH_RPC_URL}"
+  ws_url: "${GETH_WS_URL}"
+  api_key: "${GETH_API_KEY}"
+  api_key_type: "${GETH_API_KEY_TYPE}"
+
+indexer:
+  start_height: 0
+  concurrent_blocks: 1
+  receipt_workers: 4
+  max_docs_per_txn: 100
+  max_tx_docs_per_batch: 100
+  max_log_docs_per_batch: 125
+  max_ale_docs_per_batch: 500
+  blocks_per_minute: 120
+  health_server_port: 8080
+  open_browser_on_start: false
+  start_buffer: 0
+  schema_auth_mode: "none"
+
+logger:
+  development: true
+  level: "info"
+
+pruner:
+  enabled: false
+
+snapshot:
+  enabled: false

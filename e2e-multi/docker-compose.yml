@@ -1,0 +1,200 @@
+# E2E-multi: anvil → 3 generators ⇄ 3 hosts, full P2P mesh
+#
+# Measures P2P bytes per block across many partners, to show the effect of
+# pulling CARs on demand instead of pushing them with every update.
+#
+# Images are set per node (GEN_n_IMAGE / HOST_n_IMAGE) so mixed-version
+# meshes can be tested.
+#
+# Driven by ./run.sh — do not `up` this file directly. Nodes are started one
+# at a time so each can bootstrap to every node started before it; libp2p
+# connections are bidirectional, so that yields a full mesh (15 links).
+#
+# Two networks isolate the measurement:
+#   chain-net  anvil + generators (JSON-RPC indexing traffic)
+#   p2p-net    generators + hosts (libp2p traffic only)
+# Generators bind libp2p to their p2p-net IP, so the p2p-net interface
+# counters are the P2P traffic and nothing else from the chain side.
+
+name: shinzo-e2e-multi
+
+networks:
+  chain-net:
+    driver: bridge
+  p2p-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+x-generator: &generator
+  environment:
+    - GETH_RPC_URL=http://anvil:8545
+    - GETH_WS_URL=ws://anvil:8545
+    - GETH_API_KEY=test
+    - GETH_API_KEY_TYPE=none
+    - DEFRADB_KEYRING_SECRET=e2e-test-secret
+    - DEFRADB_P2P_ACCEPT_INCOMING=${GEN_ACCEPT_INCOMING:-false}
+    - INDEXER_START_HEIGHT=0
+    - GOMEMLIMIT=${GEN_GOMEMLIMIT:-2GiB}
+    - SNAPSHOT_ENABLED=false
+    - LOG_LEVEL=info
+    - LOG_SOURCE=false
+    - LOG_STACKTRACE=false
+    - SCHEMA_AUTH_MODE=none
+  mem_limit: ${NODE_MEM_LIMIT:-3g}
+  healthcheck:
+    test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+    interval: 5s
+    timeout: 10s
+    retries: 30
+    start_period: 30s
+
+x-host: &host
+  environment:
+    - DEFRA_URL=0.0.0.0:9181
+    # Hosts had no Go memory limit while generators did, so a host's heap could grow until the
+    # cgroup killed it. Keep this below mem_limit so the GC reacts before Docker does.
+    - GOMEMLIMIT=${HOST_GOMEMLIMIT:-2GiB}
+    - LOG_LEVEL=info
+    - LOG_SOURCE=false
+    - LOG_STACKTRACE=false
+  mem_limit: ${NODE_MEM_LIMIT:-3g}
+  healthcheck:
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/metrics"]
+    interval: 5s
+    timeout: 10s
+    retries: 30
+    start_period: 60s
+
+services:
+  # Mining starts disabled; run.sh enables 1s interval mining once the mesh is
+  # up, so the measured window is steady-state live replication, not catch-up.
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: e2e-multi-anvil
+    entrypoint: ["anvil"]
+    command:
+      - "--host=0.0.0.0"
+      - "--port=8545"
+      - "--no-mining"
+      - "--accounts=10"
+      - "--balance=10000"
+      - "--chain-id=1"
+    networks: [chain-net]
+    healthcheck:
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # Sends a steady mix of value transfers and log-emitting contract calls so
+  # blocks carry transactions, receipts and logs, not just empty headers.
+  loadgen:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: e2e-multi-loadgen
+    entrypoint: ["sh", "/loadgen.sh"]
+    environment:
+      - RPC_URL=http://anvil:8545
+      - LOAD_ACCOUNTS=${LOAD_ACCOUNTS:-4}
+      - LOAD_INTERVAL=${LOAD_INTERVAL:-0.2}
+    volumes:
+      - ./loadgen.sh:/loadgen.sh:ro
+    networks: [chain-net]
+    profiles: [load]
+
+  gen-1:
+    <<: *generator
+    container_name: e2e-multi-gen-1
+    image: ${GEN_1_IMAGE:-shinzo-indexer:candidate}
+    ports: ["18081:8080"]
+    networks:
+      chain-net: {}
+      p2p-net: {ipv4_address: 172.30.0.11}
+    volumes:
+      - ./.run/gen-1.yaml:/app/config/config.yaml:ro
+      - gen-1-data:/app/.defra
+
+  gen-2:
+    <<: *generator
+    container_name: e2e-multi-gen-2
+    image: ${GEN_2_IMAGE:-shinzo-indexer:candidate}
+    ports: ["18082:8080"]
+    networks:
+      chain-net: {}
+      p2p-net: {ipv4_address: 172.30.0.12}
+    volumes:
+      - ./.run/gen-2.yaml:/app/config/config.yaml:ro
+      - gen-2-data:/app/.defra
+
+  gen-3:
+    <<: *generator
+    container_name: e2e-multi-gen-3
+    image: ${GEN_3_IMAGE:-shinzo-indexer:candidate}
+    ports: ["18083:8080"]
+    networks:
+      chain-net: {}
+      p2p-net: {ipv4_address: 172.30.0.13}
+    volumes:
+      - ./.run/gen-3.yaml:/app/config/config.yaml:ro
+      - gen-3-data:/app/.defra
+
+  host-1:
+    <<: *host
+    container_name: e2e-multi-host-1
+    image: ${HOST_1_IMAGE:-shinzo-host:candidate}
+    ports: ["18091:8080"]
+    networks:
+      p2p-net: {ipv4_address: 172.30.0.21}
+    environment:
+      - DEFRA_URL=0.0.0.0:9181
+      - LOG_LEVEL=info
+      - LOG_SOURCE=false
+      - LOG_STACKTRACE=false
+      - BOOTSTRAP_PEERS=${HOST_1_PEERS:-}
+    volumes:
+      - ./host.yaml:/app/config.yaml:ro
+      - host-1-data:/app/.defra
+
+  host-2:
+    <<: *host
+    container_name: e2e-multi-host-2
+    image: ${HOST_2_IMAGE:-shinzo-host:candidate}
+    ports: ["18092:8080"]
+    networks:
+      p2p-net: {ipv4_address: 172.30.0.22}
+    environment:
+      - DEFRA_URL=0.0.0.0:9181
+      - LOG_LEVEL=info
+      - LOG_SOURCE=false
+      - LOG_STACKTRACE=false
+      - BOOTSTRAP_PEERS=${HOST_2_PEERS:-}
+    volumes:
+      - ./host.yaml:/app/config.yaml:ro
+      - host-2-data:/app/.defra
+
+  host-3:
+    <<: *host
+    container_name: e2e-multi-host-3
+    image: ${HOST_3_IMAGE:-shinzo-host:candidate}
+    ports: ["18093:8080"]
+    networks:
+      p2p-net: {ipv4_address: 172.30.0.23}
+    environment:
+      - DEFRA_URL=0.0.0.0:9181
+      - LOG_LEVEL=info
+      - LOG_SOURCE=false
+      - LOG_STACKTRACE=false
+      - BOOTSTRAP_PEERS=${HOST_3_PEERS:-}
+    volumes:
+      - ./host.yaml:/app/config.yaml:ro
+      - host-3-data:/app/.defra
+
+volumes:
+  gen-1-data:
+  gen-2-data:
+  gen-3-data:
+  host-1-data:
+  host-2-data:
+  host-3-data:
