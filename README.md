@@ -164,6 +164,71 @@ quietly ignore them — a healthy-looking stack with an empty host. Either build
 the host from source too, or query the generator directly on `:9181` rather than
 the host on `:9281`.
 
+## Multiple generators connected to one host
+
+Two overlays reuse the base stack. They require Compose 2.24.4 or later for
+`!override`, which replaces inherited ports and dependencies.
+
+Two generators indexing the same Anvil:
+
+```bash
+docker compose -f docker-compose.yaml \
+  -f docker-compose.two-generators.yaml up -d --wait
+```
+
+The second generator has its own database volume, static IP `172.31.0.21`,
+health endpoint on `8082`, DefraDB API on `9381`, and P2P port on `9371`.
+The existing host bootstraps to both generators. Check host connection logs
+and stop each generator in turn to test failover; host data alone does not
+prove that both peers are contributing.
+
+Two generators indexing separate local EVM chains:
+
+```bash
+docker compose -f docker-compose.yaml \
+  -f docker-compose.two-generators.yaml \
+  -f docker-compose.two-chains.yaml up -d --wait
+```
+
+This adds `anvil-2` (RPC on `8547`) and `seeder-2`, and points `generator-2`
+at that Anvil. Optional `.env` settings are `ANVIL_2_CHAIN_ID` (default
+`31338`), `CHAIN_2_NAME` (default `Ethereum`), and `CHAIN_2_NETWORK` (default
+`Local2`). The second generator publishes `Ethereum__Local2__*` by default.
+Anvil simulates EVM chains; changing these settings does not simulate a
+non-EVM protocol.
+
+**The different-chain overlay configures sources and peer connections, but
+the current host setup does not automatically load both chain schemas.**
+It resolves one schema at startup, falling back here to its embedded
+`Ethereum__Mainnet__*` schema. Receiving both namespaces requires host schema
+and replication support for both; a healthy host is not proof of multi-chain
+replication. Inspect the second generator directly on `9381` to verify its
+indexing. Do not give different chains the same collection namespace to work
+around this limitation, since that would mix their data.
+
+For more generators, repeat the `generator-2` definition with a unique service
+name, IP, volume, and published ports, and add each address to the host's
+comma-separated `BOOTSTRAP_PEERS` and health dependencies. For more chains,
+also repeat the Anvil/seeder pair and set each generator's RPC endpoints and
+chain namespace.
+
+The existing source overlay changes only `generator`. To build the second
+generator too, add the following under `generator-2` in the two-generators
+overlay and include `--build` in the command:
+
+```yaml
+    image: shinzo-generator:local
+    build:
+      context: ${GENERATOR_REPO:-../shinzo-generator-client}
+      dockerfile: Dockerfile
+```
+
+Use the same overlay list for subsequent `logs`, `stop`, and `down` commands.
+Switching chain namespaces requires fresh generator and host stores; preserve
+any data you need before removing their volumes. When moving between these
+two scenarios, also remove the old `anvil-2`/`seeder-2` containers with
+`--remove-orphans` if they are no longer part of the selected configuration.
+
 ## Why the collections say "Mainnet"
 
 Collection names are derived as `{CHAIN_NAME}__{CHAIN_NETWORK}__Block`, so the

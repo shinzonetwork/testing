@@ -1,0 +1,25 @@
+# Two independent generators indexing the same source, connected to one host.
+services:
+  generator-2:
+    extends:
+      file: docker-compose.yaml
+      service: generator
+    networks:
+      shinzo:
+        ipv4_address: 172.31.0.21
+    volumes:
+      - generator-2-data:/app/.defra
+    ports: !override
+      - "8082:8080"
+      - "9381:9181"
+      - "9371:9171"
+
+  host:
+    depends_on:
+      generator-2:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_PEERS: /ip4/172.31.0.20/tcp/9171,/ip4/172.31.0.21/tcp/9171
+
+volumes:
+  generator-2-data:
