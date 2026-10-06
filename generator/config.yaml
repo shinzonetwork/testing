@@ -29,6 +29,9 @@ defradb:
     retry_base_delay_ms: 1000
     reconnect_interval_ms: 60000
     enable_auto_reconnect: true
+    resource_memory_mib: 2048
+    resource_file_descriptors: 8192
+    max_streams_per_peer: 4096
   store:
     path: "./.defra"
     block_cache_mb: 128
