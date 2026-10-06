@@ -105,7 +105,7 @@ Everything lives in `.env`. The values worth knowing about:
 
 ### A note on the image tags
 
-The generator and host are pinned to `v0.6.5.4-ethereum-mainnet`, which exists
+The generator and host are pinned to `v0.7.0-ethereum-mainnet`, which exists
 in both repos and was built from the same release. Bump them together — a
 mismatched pair will disagree about schema. Not every tag in those registries
 resolves, so check a tag pulls before pinning it.
