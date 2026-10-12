@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
@@ -44,11 +47,15 @@ func TestShinzoTestSuite(t *testing.T) {
 
 // SetupSuite is called once before entire suite. It's spins up containers and wait for them.
 func (s *ShinzoTestSuite) SetupSuite() {
+	s.setupStack("test", "docker-compose.yaml")
+}
+
+func (s *ShinzoTestSuite) setupStack(identifier string, files ...string) {
 	ctx := s.T().Context()
 
 	stack, err := compose.NewDockerComposeWith(
-		compose.StackIdentifier("test"),
-		compose.WithStackFiles("docker-compose.yaml"),
+		compose.StackIdentifier(identifier),
+		compose.WithStackFiles(files...),
 	)
 	s.Require().NoError(err)
 
@@ -85,6 +92,10 @@ type graphQLResponse struct {
 // left in the response for the caller to judge, as a query against a host that
 // has not replicated anything yet is not necessarily a test failure.
 func (s *ShinzoTestSuite) query(ctx context.Context, graphQL string) (graphQLResponse, error) {
+	return queryGraphQL(ctx, s.hostGraphQL, graphQL)
+}
+
+func queryGraphQL(ctx context.Context, endpoint, graphQL string) (graphQLResponse, error) {
 	var result graphQLResponse
 
 	type query struct {
@@ -96,7 +107,7 @@ func (s *ShinzoTestSuite) query(ctx context.Context, graphQL string) (graphQLRes
 		return result, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.hostGraphQL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return result, err
 	}
@@ -159,4 +170,81 @@ func (s *ShinzoTestSuite) TestBasicQuery() {
 	}, blockTimeout, blockTick, "host returned no blocks within %s", blockTimeout)
 
 	s.Require().LessOrEqual(len(payload.Blocks), 3)
+}
+
+// SharedAnvilTestSuite keeps one host and two independent generators on the
+// same chain. It reuses the basic query test and the base suite's teardown.
+type SharedAnvilTestSuite struct {
+	ShinzoTestSuite
+}
+
+func TestSharedAnvilTestSuite(t *testing.T) {
+	suite.Run(t, new(SharedAnvilTestSuite))
+}
+
+func (s *SharedAnvilTestSuite) SetupSuite() {
+	s.setupStack("test-shared-anvil", "docker-compose.yaml", "docker-compose.two-generators.yaml")
+}
+
+type chainBlock struct {
+	Number int64  `json:"number"`
+	Hash   string `json:"hash"`
+}
+
+func latestChainBlock(ctx context.Context, endpoint string) (chainBlock, error) {
+	response, err := queryGraphQL(ctx, endpoint,
+		`{ Ethereum__Mainnet__Block(limit: 1, order: {number: DESC}) { number hash } }`)
+	if err != nil {
+		return chainBlock{}, err
+	}
+	if len(response.Errors) != 0 {
+		return chainBlock{}, fmt.Errorf("GraphQL errors: %v", response.Errors)
+	}
+	var payload struct {
+		Blocks []chainBlock `json:"Ethereum__Mainnet__Block"`
+	}
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		return chainBlock{}, err
+	}
+	if len(payload.Blocks) == 0 {
+		return chainBlock{}, fmt.Errorf("no blocks replicated yet")
+	}
+	return payload.Blocks[0], nil
+}
+
+func (s *SharedAnvilTestSuite) TestReplicationFromEachGenerator() {
+	ctx := s.T().Context()
+	for _, stopped := range []string{"generator", "generator-2"} {
+		s.Run("without-"+stopped, func() {
+			container, err := s.stack.ServiceContainer(ctx, stopped)
+			s.Require().NoError(err)
+			stopTimeout := 30 * time.Second
+			s.Require().NoError(container.Stop(ctx, &stopTimeout))
+			// Restore the generator even when an assertion fails, so the next
+			// subtest starts with both generators available.
+			defer func() {
+				restartCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				s.Require().NoError(container.Start(restartCtx))
+			}()
+
+			// Capture the chain tip after shutdown. Blocks above this height
+			// cannot come from the stopped generator, even via buffered updates.
+			anvil, err := s.stack.ServiceContainer(ctx, "anvil")
+			s.Require().NoError(err)
+			code, output, err := anvil.Exec(ctx, []string{"cast", "block-number", "--rpc-url", "http://localhost:8545"}, tcexec.Multiplexed())
+			s.Require().NoError(err)
+			s.Require().Zero(code)
+			raw, err := io.ReadAll(output)
+			s.Require().NoError(err)
+			baseline, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+			s.Require().NoError(err)
+			s.Require().Eventually(func() bool {
+				queryCtx, cancel := context.WithTimeout(ctx, time.Second)
+				defer cancel()
+				block, queryErr := latestChainBlock(queryCtx, s.hostGraphQL)
+				return queryErr == nil && block.Number > baseline && block.Hash != ""
+			}, blockTimeout, blockTick, "host did not receive new blocks with %s stopped", stopped)
+		})
+	}
 }

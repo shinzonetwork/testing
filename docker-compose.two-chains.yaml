@@ -1,0 +1,38 @@
+# Layer after two-generators.yaml. This configures the second data source;
+# receiving both namespaces also requires multi-chain schema support in host.
+services:
+  anvil-2:
+    extends:
+      file: docker-compose.yaml
+      service: anvil
+    command: !override
+      - --host
+      - 0.0.0.0
+      - --chain-id
+      - ${ANVIL_2_CHAIN_ID:-31338}
+      - --block-time
+      - ${ANVIL_BLOCK_TIME}
+    ports: !override
+      - "8547:8545"
+
+  seeder-2:
+    extends:
+      file: docker-compose.yaml
+      service: seeder
+    depends_on: !override
+      anvil-2:
+        condition: service_healthy
+    environment:
+      ANVIL_RPC_URL: http://anvil-2:8545
+
+  generator-2:
+    depends_on: !override
+      anvil-2:
+        condition: service_healthy
+      shinzohub:
+        condition: service_healthy
+    environment:
+      GETH_RPC_URL: http://anvil-2:8545
+      GETH_WS_URL: ws://anvil-2:8545
+      CHAIN_NAME: ${CHAIN_2_NAME:-Ethereum}
+      CHAIN_NETWORK: ${CHAIN_2_NETWORK:-Local2}
