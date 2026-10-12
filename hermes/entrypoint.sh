@@ -16,17 +16,23 @@ MARKER=/home/hermes/.hermes/connection-ready
 CHAIN_ID="${SHINZOHUB_CHAIN_ID:-91273001}"
 ATTEMPTS="${CONNECTION_ATTEMPTS:-10}"
 
-MNEMONIC="divert tenant reveal hire thing jar carry lonely magic oak audit fiber earth catalog cheap merry print clown portion speak daring giant weird slight"
+# One key per chain. On ShinzoHub the relayer must not sign as acc0: the
+# register-* one-shots broadcast from acc0 while Hermes is relaying their
+# packets, and sharing an account sequence makes one of them fail with
+# "account sequence mismatch".
+SOURCEHUB_MNEMONIC="${SOURCEHUB_RELAYER_MNEMONIC:?SOURCEHUB_RELAYER_MNEMONIC must be set}"
+SHINZOHUB_MNEMONIC="${SHINZOHUB_RELAYER_MNEMONIC:?SHINZOHUB_RELAYER_MNEMONIC must be set}"
 
 rm -f "$MARKER"
 mkdir -p /home/hermes/.hermes
 sed "s/__SHINZOHUB_CHAIN_ID__/$CHAIN_ID/g" /tmp/hermes-config.toml > "$CONFIG"
 
 echo "==> Adding hermes keys..."
-echo "$MNEMONIC" > /tmp/mnemonic.txt
-hermes --config "$CONFIG" keys add --chain sourcehub --mnemonic-file /tmp/mnemonic.txt
-hermes --config "$CONFIG" keys add --chain "$CHAIN_ID" --mnemonic-file /tmp/mnemonic.txt --hd-path "m/44'/60'/0'/0/0"
-rm /tmp/mnemonic.txt
+echo "$SOURCEHUB_MNEMONIC" > /tmp/sourcehub-mnemonic.txt
+echo "$SHINZOHUB_MNEMONIC" > /tmp/shinzohub-mnemonic.txt
+hermes --config "$CONFIG" keys add --chain sourcehub --mnemonic-file /tmp/sourcehub-mnemonic.txt
+hermes --config "$CONFIG" keys add --chain "$CHAIN_ID" --mnemonic-file /tmp/shinzohub-mnemonic.txt --hd-path "m/44'/60'/0'/0/0"
+rm /tmp/sourcehub-mnemonic.txt /tmp/shinzohub-mnemonic.txt
 
 echo "==> Creating IBC connection (sourcehub <-> $CHAIN_ID)..."
 for i in $(seq 1 "$ATTEMPTS"); do

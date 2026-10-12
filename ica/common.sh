@@ -15,7 +15,7 @@ export NODE="${NODE:-tcp://shinzohub:26657}"
 export FEES="${FEES:-9000ushinzo}"
 export TX_ATTEMPTS="${TX_ATTEMPTS:-60}"
 
-ACC0_MNEMONIC="divert tenant reveal hire thing jar carry lonely magic oak audit fiber earth catalog cheap merry print clown portion speak daring giant weird slight"
+ACC0_MNEMONIC="${ACC0_MNEMONIC:?ACC0_MNEMONIC must be set}"
 
 ensure_key () {
   mkdir -p "$HOME_DIR"

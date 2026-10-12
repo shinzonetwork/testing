@@ -34,12 +34,10 @@ JSONRPC_WS=8546
 
 BINARY=shinzohubd
 
-# Fixed demo mnemonics. acc0 is the admin account the ICA/policy txs are signed
-# with; hermes is the relayer's ShinzoHub account.
-ACC0_MNEMONIC="divert tenant reveal hire thing jar carry lonely magic oak audit fiber earth catalog cheap merry print clown portion speak daring giant weird slight"
-HERMES_MNEMONIC="decorate bright ozone fork gallery riot bus exhaust worth way bone indoor calm squirrel merry zero scheme cotton until shop any excess stage laundry"
-# Derived from ACC0_MNEMONIC. Only this account may register-ica / register-policy.
-ADMIN_ADDR="shinzo1g4zla6r5erlf364x5lcgvff6rmek4uwxwlfzs8"
+# Demo mnemonics, from .env. acc0 is the admin account the ICA/policy txs are
+# signed with; hermes is the relayer's ShinzoHub account.
+ACC0_MNEMONIC="${ACC0_MNEMONIC:?ACC0_MNEMONIC must be set}"
+HERMES_MNEMONIC="${HERMES_MNEMONIC:?HERMES_MNEMONIC must be set}"
 
 update_genesis () {
   jq "$1" "$HOME_DIR/config/genesis.json" > "$HOME_DIR/config/tmp_genesis.json" \
@@ -60,13 +58,16 @@ if [ ! -f "$HOME_DIR/config/genesis.json" ]; then
   add_key "$KEY"  "$ACC0_MNEMONIC"
   add_key "$KEY2" "$HERMES_MNEMONIC"
 
+  # Only this account may register-ica / register-policy.
+  ADMIN_ADDR=$($BINARY keys show "$KEY" -a --keyring-backend "$KEYRING" --home "$HOME_DIR")
+
   $BINARY init "$MONIKER" --chain-id "$CHAIN_ID" --default-denom "$DENOM" --home "$HOME_DIR"
 
   $BINARY config set client chain-id "$CHAIN_ID" --home "$HOME_DIR"
   $BINARY config set client keyring-backend "$KEYRING" --home "$HOME_DIR"
 
   # ── Core modules ──
-  update_genesis '.consensus_params["block"]["max_gas"]="10000000000"'
+  update_genesis '.consensus["params"]["block"]["max_gas"]="10000000000"'
   update_genesis '.consensus["params"]["block"]["max_bytes"]="104857600"'
 
   update_genesis "$(printf '.app_state["gov"]["params"]["min_deposit"]=[{"denom":"%s","amount":"1000000"}]' "$DENOM")"

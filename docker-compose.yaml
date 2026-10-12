@@ -29,6 +29,7 @@ x-ica-oneshot: &ica-oneshot
     CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
     NODE: tcp://shinzohub:26657
     HOME_DIR: /tmp/ica-home
+    ACC0_MNEMONIC: ${ACC0_MNEMONIC:?set ACC0_MNEMONIC in .env (see .env.sample)}
 
 networks:
   shinzo:
@@ -109,7 +110,8 @@ services:
 
   fund-hermes:
     # The standalone SourceHub image funds only validator + faucet. The relayer
-    # account derived from the shared mnemonic needs a balance of its own.
+    # account needs a balance of its own. The address is the one
+    # ACC0_MNEMONIC derives on SourceHub (cosmos path), Hermes' SourceHub key.
     image: ${SOURCEHUB_IMAGE}
     networks: [shinzo]
     restart: "no"
@@ -142,6 +144,8 @@ services:
       CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
       HOME_DIR: /shinzohub
       BLOCK_TIME: ${BLOCK_TIME}
+      ACC0_MNEMONIC: ${ACC0_MNEMONIC:?set ACC0_MNEMONIC in .env (see .env.sample)}
+      HERMES_MNEMONIC: ${HERMES_MNEMONIC:?set HERMES_MNEMONIC in .env (see .env.sample)}
     ports:
       - "26657:26657"   # CometBFT RPC
       - "1317:1317"     # Cosmos REST
@@ -171,6 +175,11 @@ services:
       - ./hermes/entrypoint.sh:/usr/local/bin/shinzo-hermes-entrypoint.sh:ro
     environment:
       SHINZOHUB_CHAIN_ID: ${SHINZOHUB_CHAIN_ID}
+      # SourceHub keeps the acc0 phrase, since fund-hermes pays that address.
+      # ShinzoHub gets the dedicated hermes account, so the relayer never
+      # shares acc0's sequence with the register-* one-shots.
+      SOURCEHUB_RELAYER_MNEMONIC: ${ACC0_MNEMONIC:?set ACC0_MNEMONIC in .env (see .env.sample)}
+      SHINZOHUB_RELAYER_MNEMONIC: ${HERMES_MNEMONIC:?set HERMES_MNEMONIC in .env (see .env.sample)}
     entrypoint: ["/bin/bash", "/usr/local/bin/shinzo-hermes-entrypoint.sh"]
     healthcheck:
       # The entrypoint writes this only after `create connection` succeeds, so

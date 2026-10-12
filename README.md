@@ -102,6 +102,11 @@ Everything lives in `.env`. The values worth knowing about:
   stored schema.
 - **`DEFRADB_KEYRING_SECRET`** — must be non-empty; the generator refuses to
   start without one.
+- **`ACC0_MNEMONIC` / `HERMES_MNEMONIC`** — demo keys. `acc0` is ShinzoHub's
+  admin and signs the `register-*` transactions; Hermes relays on ShinzoHub as
+  the separate `hermes` account so the two never collide on an account
+  sequence. On SourceHub, Hermes uses the `acc0` phrase, whose address
+  `fund-hermes` pays. Changing either needs `docker compose down -v`.
 
 ### A note on the image tags
 
