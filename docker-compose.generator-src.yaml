@@ -1,0 +1,19 @@
+# Overlay: build the generator from a local checkout instead of pulling a
+# published image.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.generator-src.yaml \
+#     up -d --build --wait
+#
+# Builds whatever is currently checked out in GENERATOR_REPO — branch, tag or
+# detached commit. To test a different version, check it out there and re-run
+# with --build.
+#
+# The first build is slow: the Dockerfile fetches WASM runtimes and compiles
+# with cgo.
+
+services:
+  generator:
+    image: shinzo-generator:local
+    build:
+      context: ${GENERATOR_REPO:-../shinzo-generator-client}
+      dockerfile: Dockerfile

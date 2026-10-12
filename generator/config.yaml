@@ -1,0 +1,83 @@
+# Generator config for the local Docker stack.
+#
+# This file is mounted over the one in the image because the generator does not
+# expand environment variables inside its YAML — it unmarshals the file as-is
+# and then applies env overrides only where the variable is non-empty. So any
+# "${VAR}" left in the config survives as a literal string.
+#
+# That matters most for the api_key fields below; see the note there.
+
+chain:
+  name: "Ethereum"
+  # Must match the host's schema naming; see CHAIN_NETWORK in .env.
+  network: "Mainnet"
+  # Bare hostname; ShinzoHubAPIURL() adds the port.
+  hub: "shinzohub"
+
+defradb:
+  url: "0.0.0.0:9181"
+  # Overridden by DEFRADB_KEYRING_SECRET; must be non-empty or startup fails.
+  keyring_secret: "local-demo-keyring-secret"
+  embedded: true
+  p2p:
+    enabled: true
+    # The generator is the source of truth; it publishes and does not accept.
+    accept_incoming: false
+    bootstrap_peers: []
+    listen_addr: "/ip4/0.0.0.0/tcp/9171"
+    max_retries: 5
+    retry_base_delay_ms: 1000
+    reconnect_interval_ms: 60000
+    enable_auto_reconnect: true
+    resource_memory_mib: 2048
+    resource_file_descriptors: 8192
+    max_streams_per_peer: 4096
+  store:
+    path: "./.defra"
+    block_cache_mb: 128
+    memtable_mb: 32
+    index_cache_mb: 64
+    num_compactors: 2
+    value_log_file_size_mb: 64
+
+geth:
+  # Overridden by GETH_RPC_URL / GETH_WS_URL from .env (anvil by default).
+  node_url: "http://anvil:8545"
+  ws_url: "ws://anvil:8545"
+  # Must stay empty. See the header note above.
+  api_key: ""
+  api_key_type: ""
+
+indexer:
+  start_height: 0
+  concurrent_blocks: 1
+  receipt_workers: 4
+  max_docs_per_txn: 100
+  max_tx_docs_per_batch: 100
+  max_log_docs_per_batch: 125
+  max_ale_docs_per_batch: 500
+  # Anvil at --block-time 2 produces 30 blocks/min, so 60/min keeps up easily.
+  blocks_per_minute: 60
+  health_server_port: 8080
+  open_browser_on_start: false
+  # On a fresh anvil the chain tip is 0, and resolveStartHeight() clamps
+  # max(tip - start_buffer, 0), so this cannot go negative.
+  start_buffer: 100
+  schema_auth_mode: "none"
+
+logger:
+  development: true
+  level: "info"
+
+pruner:
+  enabled: true
+  max_blocks: 1000
+  prune_threshold: 1
+  interval_seconds: 30
+  prune_history: true
+
+snapshot:
+  enabled: false
+  dir: "./.defra/snapshots"
+  blocks_per_file: 100
+  interval_seconds: 30
