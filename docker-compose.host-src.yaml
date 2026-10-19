@@ -1,0 +1,19 @@
+# Overlay: build the host client from a local checkout instead of pulling a
+# published image.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.host-src.yaml \
+#     up -d --build --wait
+#
+# Builds whatever is currently checked out in HOST_REPO — branch, tag or
+# detached commit. To test a different version, check it out there and re-run
+# with --build.
+#
+# The first build is slow: the Dockerfile fetches WASM runtimes, generates the
+# playground assets and compiles with cgo.
+
+services:
+  host:
+    image: shinzo-host:local
+    build:
+      context: ${HOST_REPO:-../shinzo-host-client}
+      dockerfile: Dockerfile
