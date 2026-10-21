@@ -1,0 +1,103 @@
+# Nightly e2e-multi suite: client HEADs (candidate) against the published release
+# (baseline), plus the real-chain benchmarks. Everything the suite writes is
+# uploaded as the run's artifact; REPORT.md also goes to the job summary.
+#
+# Repo settings:
+#   secrets.CLIENT_REPOS_TOKEN   read access to the client repos, if they are private
+#   secrets.GETH_RPC_URL         real Ethereum RPC for blocktime/readload (stage skipped without it)
+#   secrets.GETH_WS_URL, secrets.GETH_API_KEY   optional, see blocktime.sh
+#   vars.NIGHTLY_RUNNER          runner label, e.g. a self-hosted benchmark box (default ubuntu-latest)
+#   vars.BASELINE_GEN_IMAGE / vars.BASELINE_HOST_IMAGE   default: the v0.7.0 release
+
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "quick (~45 min) or full (~110 min)"
+        default: quick
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  suite:
+    runs-on: ${{ vars.NIGHTLY_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 330
+    env:
+      PROFILE: ${{ inputs.profile || 'quick' }}
+      # Unit tests run in each client repo's CI, and defradb-p2p would need a defradb
+      # checkout pinned to the clients' go.mod version.
+      SKIP_UNIT: "1"
+      # Nightly gates on failures and regressions, not on beating the release.
+      REQUIRE_IMPROVEMENT: "0"
+      BASELINE_GEN_IMAGE: ${{ vars.BASELINE_GEN_IMAGE || 'ghcr.io/shinzonetwork/shinzo-generator-client:v0.7.0-ethereum-mainnet' }}
+      BASELINE_HOST_IMAGE: ${{ vars.BASELINE_HOST_IMAGE || 'ghcr.io/shinzonetwork/shinzo-host-client:v0.7.0-ethereum-mainnet' }}
+      GETH_RPC_URL: ${{ secrets.GETH_RPC_URL }}
+      GETH_WS_URL: ${{ secrets.GETH_WS_URL }}
+      GETH_API_KEY: ${{ secrets.GETH_API_KEY }}
+      SUITE_DIR: ${{ github.workspace }}/e2e/e2e-multi/results/suite-nightly-${{ github.run_id }}
+    steps:
+      # suite.sh expects the client repos as siblings of e2e/
+      - uses: actions/checkout@v4
+        with:
+          path: e2e
+      - uses: actions/checkout@v4
+        with:
+          repository: shinzonetwork/shinzo-indexer-client
+          path: shinzo-indexer-client
+          token: ${{ secrets.CLIENT_REPOS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: shinzonetwork/shinzo-host-client
+          path: shinzo-host-client
+          token: ${{ secrets.CLIENT_REPOS_TOKEN || github.token }}
+
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.CLIENT_REPOS_TOKEN || github.token }}
+
+      - name: Pull baseline images
+        run: |
+          docker pull -q "${BASELINE_GEN_IMAGE}"
+          docker pull -q "${BASELINE_HOST_IMAGE}"
+
+      - name: Run suite
+        run: ./e2e/e2e-multi/suite.sh
+
+      - name: Dashboard and job summary
+        if: always()
+        run: |
+          ./e2e/e2e-multi/report.sh || true
+          cp e2e/e2e-multi/results/dashboard.html "${SUITE_DIR}/" 2>/dev/null || true
+          mkdir -p "${SUITE_DIR}"
+          for r in e2e shinzo-indexer-client shinzo-host-client; do
+            echo "${r} $(git -C "${r}" rev-parse HEAD)"
+          done > "${SUITE_DIR}/commits.txt"
+          {
+            echo '```'; cat "${SUITE_DIR}/commits.txt"; echo '```'
+            echo
+            cat "${SUITE_DIR}/REPORT.md" 2>/dev/null || echo "No REPORT.md; see the artifact's logs/."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-${{ github.run_id }}
+          path: ${{ env.SUITE_DIR }}
+          retention-days: 90
+          if-no-files-found: warn
