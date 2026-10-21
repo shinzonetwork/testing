@@ -13,7 +13,9 @@ set -uo pipefail  # no -e: every stage records its result and the suite carries 
 #   4 benchmark   baseline vs candidate: traffic, CPU, memory, disk, lag
 #   5 regression  restart (and freeze, full profile) under load, baseline vs candidate
 #   6 compat      mixed-version meshes: every rolling-upgrade order
-#   7 report      REPORT.md + summary.json in the suite directory
+#   7 realchain   candidate against a real Ethereum RPC: blocktime.sh, readload.sh
+#                 (skipped unless GETH_RPC_URL is set)
+#   8 report      REPORT.md + summary.json in the suite directory
 #
 # Usage:
 #   ./suite.sh                  PROFILE=quick  (~45 min)
@@ -26,6 +28,9 @@ set -uo pipefail  # no -e: every stage records its result and the suite carries 
 #      STAGES=build,smoke,benchmark     run only these stages (default: all)
 #      BASELINE_GEN_IMAGE / BASELINE_HOST_IMAGE   compare against these images
 #                                       instead of building :baseline
+#      REQUIRE_IMPROVEMENT=0            don't require bench-3x3 mesh bytes/block to be
+#                                       better (nightly: gate on failures and regressions only)
+#      GETH_RPC_URL, GETH_API_KEY, ...  for the realchain stage, as for blocktime.sh
 # Exit status: 0 when the verdict is READY, 1 otherwise.
 # ───────────────────────────────────────────────────────────────
 
@@ -45,7 +50,8 @@ STATUS="${SUITE_DIR}/status.tsv"
 # A baseline image given here (e.g. a published release) is used as-is and not built.
 BASE_GEN="${BASELINE_GEN_IMAGE:-shinzo-indexer:baseline}"
 BASE_HOST="${BASELINE_HOST_IMAGE:-shinzo-host:baseline}"
-STAGES="${STAGES:-unit,build,smoke,benchmark,regression,compat}"
+STAGES="${STAGES:-unit,build,smoke,benchmark,regression,compat,realchain}"
+REQUIRE_IMPROVEMENT="${REQUIRE_IMPROVEMENT:-1}"
 want() { [[ ",${STAGES}," == *",$1,"* ]]; }
 CAND_GEN="shinzo-indexer:${CANDIDATE_TAG}"
 CAND_HOST="shinzo-host:${CANDIDATE_TAG}"
@@ -71,6 +77,7 @@ preflight() {
     local tool missing=""
     for tool in docker jq curl git awk column; do command -v "${tool}" >/dev/null || missing+=" ${tool}"; done
     [[ "${SKIP_UNIT}" == 1 ]] || command -v go >/dev/null || missing+=" go"
+    want realchain && ! command -v python3 >/dev/null && missing+=" python3"
     [[ -z "${missing}" ]] || { echo "missing tools:${missing} (see GUIDE.md step 1)"; exit 1; }
     docker info >/dev/null 2>&1 || { echo "docker is not running"; exit 1; }
     local mem_gb
@@ -225,7 +232,30 @@ e2e() {
     fi
 }
 
-# ── 7 report ─────────────────────────────────────────────────
+# ── 7 realchain ──────────────────────────────────────────────
+# The candidate indexing a historical range from a real Ethereum RPC. No baseline
+# run: the numbers are tracked night over night, a failed run gates.
+realchain_case() {
+    local name="$1" start="${SECONDS}"
+    local out="${SUITE_DIR}/realchain/${name}" logfile="${SUITE_DIR}/logs/${name}.log"
+    log "▶ realchain/${name}"
+    if env OUT_DIR="${out}" GEN_IMAGE="${CAND_GEN}" HOST_IMAGE="${CAND_HOST}" "${DIR}/${name}.sh" > "${logfile}" 2>&1 \
+        && [[ -f "${out}/result.json" ]]; then
+        record realchain "${name}" PASS "$(( SECONDS - start ))s, see realchain/${name}/results.md"
+    else
+        record realchain "${name}" FAIL "$(( SECONDS - start ))s, see logs/${name}.log"
+        tail -8 "${logfile}" | sed 's/^/          /'
+    fi
+}
+
+realchain() {
+    if [[ -z "${GETH_RPC_URL:-}" ]]; then record realchain all SKIP "GETH_RPC_URL not set"; return; fi
+    if stage_failed build; then record realchain all SKIP "build failed"; return; fi
+    realchain_case blocktime
+    realchain_case readload
+}
+
+# ── 8 report ─────────────────────────────────────────────────
 report() {
     local md="${SUITE_DIR}/REPORT.md" pair rows="${SUITE_DIR}/deltas.jsonl" verdict=READY reasons=()
     : > "${rows}"
@@ -251,7 +281,7 @@ report() {
     fi
     local gate
     gate="$(jq -r 'select(.pair == "bench-3x3" and .metric == "mesh bytes/block") | .verdict' "${rows}")"
-    if [[ "${gate}" != better ]]; then
+    if [[ "${REQUIRE_IMPROVEMENT}" == 1 && "${gate}" != better ]]; then
         verdict="NOT READY"; reasons+=("bench-3x3 mesh bytes/block is '${gate:-not measured}', expected 'better'")
     fi
     if jq -e 'select(.verdict == "REGRESSION")' "${rows}" >/dev/null 2>&1; then
@@ -309,7 +339,16 @@ report() {
             done
             echo
         fi
-        echo "Raw results: \`runs/*.json\`; per-node logs: \`runs/*-logs/\`; stage logs: \`logs/\`."
+        local rc
+        for rc in blocktime readload; do
+            [[ -f "${SUITE_DIR}/realchain/${rc}/results.md" ]] || continue
+            echo "## Real chain — ${rc} (candidate)"
+            echo
+            # demote the script's own headings below this one
+            sed 's/^#/###/' "${SUITE_DIR}/realchain/${rc}/results.md"
+            echo
+        done
+        echo "Raw results: \`runs/*.json\`, \`realchain/*/result.json\`; per-node logs: \`runs/*-logs/\`; stage logs: \`logs/\`."
     } > "${md}"
 
     jq -s --arg verdict "${verdict}" '{verdict: $verdict, deltas: .}' "${rows}" > "${SUITE_DIR}/summary.json"
@@ -339,4 +378,5 @@ preflight
 want unit  && { log "── 1 unit";  unit; }
 want build && { log "── 2 build"; build; }
 log "── 3–6 e2e";  e2e
-log "── 7 report"; report
+want realchain && { log "── 7 realchain"; realchain; }
+log "── 8 report"; report
