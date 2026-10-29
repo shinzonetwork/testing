@@ -12,13 +12,16 @@ on:
 jobs:
   e2e-tests:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: e2e
     steps:
     - uses: actions/checkout@v7
 
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version-file: 'go.mod'
+        go-version-file: 'e2e/go.mod'
 
     - name: Setup .env
       run: cp .env.sample .env
