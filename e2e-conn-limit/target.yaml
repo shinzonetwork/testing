@@ -1,0 +1,59 @@
+# Target generator for the conn-limit e2e. Per-case limits come from env vars set by run.sh:
+#   DEFRADB_P2P_MAX_CONNS_PER_IP, DEFRADB_P2P_ALLOWLIST_CIDRS
+# Resource-manager budgets match production config/config.yaml, so the allowlisted and system
+# connection ceilings are the ones a real node gets.
+
+chain:
+  name: "Ethereum"
+  network: "Mainnet"
+  hub: "localhost"
+
+defradb:
+  url: "http://localhost:9181"
+  keyring_secret: ""  # DEFRADB_KEYRING_SECRET
+  embedded: true
+  p2p:
+    enabled: true
+    accept_incoming: false
+    bootstrap_peers: []
+    listen_addr: "/ip4/0.0.0.0/tcp/9171"
+    max_retries: 5
+    retry_base_delay_ms: 1000
+    reconnect_interval_ms: 10000
+    enable_auto_reconnect: false
+    resource_memory_mib: 10240
+    resource_file_descriptors: 8192
+    max_streams_per_peer: 4096
+  store:
+    path: "./.defra"
+    block_cache_mb: 128
+    memtable_mb: 32
+    index_cache_mb: 64
+    num_compactors: 2
+    value_log_file_size_mb: 64
+
+geth:
+  node_url: "${GETH_RPC_URL}"
+  ws_url: "${GETH_WS_URL}"
+  api_key: "${GETH_API_KEY}"
+  api_key_type: "${GETH_API_KEY_TYPE}"
+
+indexer:
+  start_height: 0
+  concurrent_blocks: 1
+  receipt_workers: 1
+  blocks_per_minute: 60
+  health_server_port: 8080
+  open_browser_on_start: false
+  start_buffer: 0
+  schema_auth_mode: "none"
+
+logger:
+  development: true
+  level: "info"
+
+pruner:
+  enabled: false
+
+snapshot:
+  enabled: false
